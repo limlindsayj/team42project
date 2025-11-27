@@ -21,7 +21,7 @@ void setup() {
   delay(500);
   lcd.init();
   lcd.backlight();
-  lcd.print("Hello ESP32!");
+  lcd.clear();
   i2s_config_t i2s_config = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
     .sample_rate = SAMPLE_RATE,
@@ -82,7 +82,10 @@ void loop() {
   FFT.ComplexToMagnitude(vReal, vImag, FFT_SIZE);
 
   double peakFreq = FFT.MajorPeak(vReal, FFT_SIZE, SAMPLE_RATE);
-
+  lcd.clear(); 
+  lcd.setCursor(0, 0);
+  lcd.print("Pitch: "); 
+  lcd.print(freqToNote(peakFreq));
   Serial.print("Pitch: ");
   Serial.print(peakFreq);
   Serial.print(" Hz ");
