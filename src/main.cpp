@@ -82,6 +82,16 @@ void loop() {
   FFT.ComplexToMagnitude(vReal, vImag, FFT_SIZE);
 
   double peakFreq = FFT.MajorPeak(vReal, FFT_SIZE, SAMPLE_RATE);
+
+  if (peakFreq <= 0 || isnan(peakFreq) || isinf(peakFreq)) { // Error checking in case we get invalid frequency
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Pitch: --");
+    Serial.println("Silence or invalid peak");
+    delay(50);
+    return;
+  }
+
   lcd.clear(); 
   lcd.setCursor(0, 0);
   lcd.print("Pitch: "); 
