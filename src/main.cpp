@@ -2,6 +2,12 @@
 #include "driver/i2s.h"
 #include <arduinoFFT.h>
 #include <LiquidCrystal_I2C.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
+
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
 #define I2S_WS   25    // LRCLK
 #define I2S_SCK  26    // BCLK
@@ -15,6 +21,28 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 double vReal[FFT_SIZE];
 double vImag[FFT_SIZE];
+
+void setupBLE(){
+  BLEDevice::init("NoteTutor");
+
+  BLEServer *pServer   = BLEDevice::createServer();
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+
+  BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+    CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_READ |
+    BLECharacteristic::PROPERTY_WRITE
+  );
+
+  pService->start();
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);  // functions that help with iPhone connections issue
+  pAdvertising->setMinPreferred(0x12);
+  BLEDevice::startAdvertising();
+  Serial.println("BLE Initialized");
+}
 
 void setup() {
   Serial.begin(9600);
@@ -42,6 +70,8 @@ void setup() {
 
   i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_NUM_0, &pin_config);
+
+  setupBLE();
 
   Serial.println("Microphone FFT pitch detection started!");
 }
