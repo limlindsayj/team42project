@@ -22,9 +22,21 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 double vReal[FFT_SIZE];
 double vImag[FFT_SIZE];
 
-const char* song1Notes[] = { // Adjust to notes of Twinkle Twinkle Little Star
-    "C", "C#", "D", "D#", "E", "F",
+struct Song {
+  const char** notes;
+  int length;
+  const char* name;
 };
+
+const char* song1Notes[] = { "C", "C#", "D" };
+const char* song2Notes[] = { "A", "B", "C#" };
+
+Song songs[] = {
+  { song1Notes, sizeof(song1Notes) / sizeof(song1Notes[0]), "Song 1" },
+  { song2Notes, sizeof(song2Notes) / sizeof(song2Notes[0]), "Song 2" }
+};
+
+const int NUM_SONGS = sizeof(songs) / sizeof(songs[0]);
 
 const int SONG1_LENGTH = sizeof(song1Notes) / sizeof(song1Notes[0]);
 
@@ -32,6 +44,36 @@ int currentNoteIndex = 0;        // which note we're asking for
 int correctStreakCount = 0;      // how many cycles in a row we've detected it
 const int REQUIRED_STREAK = 1;   // TODO: change this, must detect correct note for REQUIRED_STREAK cycles in a row
 bool songCompleted = false;      // flag to indicate song completion
+bool songStarted = false;        // flag to indicate song completion
+
+Song currentSong = songs[0];     // song that's been selected
+
+class MyCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pCharacteristic) override {
+    if(songStarted){
+      return; // Ignore further writes once the song has started
+    }
+    std::string value = pCharacteristic->getValue();
+    if(value.length() == 0){
+      return;
+    }
+    int songIndex = atoi(value.c_str());
+    if (songIndex >= 0 && songIndex < NUM_SONGS) {
+      Serial.println("Song selection received: " + String(songIndex));
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Great choice!");
+      delay(2000);
+      currentSong = songs[songIndex];
+      songStarted = true;
+    } else {
+      Serial.println("Invalid song index received");
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Invalid song index received");
+    }
+  }
+};
 
 void setupBLE(){
   BLEDevice::init("NoteTutor");
@@ -52,6 +94,7 @@ void setupBLE(){
   pAdvertising->setMinPreferred(0x06);  // functions that help with iPhone connections issue
   pAdvertising->setMinPreferred(0x12);
   BLEDevice::startAdvertising();
+  selectedSongCharacteristic->setCallbacks(new MyCallbacks());
   Serial.println("BLE Initialized");
 }
 
@@ -61,6 +104,7 @@ void setup() {
   lcd.init();
   lcd.backlight();
   lcd.clear();
+  lcd.setCursor(0, 0);
   i2s_config_t i2s_config = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
     .sample_rate = SAMPLE_RATE,
@@ -85,6 +129,14 @@ void setup() {
   setupBLE();
 
   Serial.println("Microphone FFT pitch detection started!");
+
+  while(!songStarted){
+    lcd.setCursor(0, 0);
+    lcd.print("Select song:");
+    lcd.setCursor(0, 1);
+    lcd.print("0: TTLS, 1: ???");
+    delay(1000);
+  }
 }
 
 String freqToNote(float freq) {
@@ -111,7 +163,7 @@ void loop() {
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("Song complete!");
-    lcd.setCursor(1, 0);
+    lcd.setCursor(0, 1);
     lcd.print("Congrats :)");
     delay(10000);
     return;
@@ -137,7 +189,7 @@ void loop() {
 
   double peakFreq = FFT.MajorPeak(vReal, FFT_SIZE, SAMPLE_RATE);
 
-  const char* targetNote = song1Notes[currentNoteIndex];
+  const char* targetNote = currentSong.notes[currentNoteIndex];
 
   if (peakFreq <= 0 || isnan(peakFreq) || isinf(peakFreq)) {
     // Silence or invalid reading: just show target note, reset streak
@@ -182,7 +234,7 @@ void loop() {
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Play: ");
-  lcd.print(song1Notes[currentNoteIndex]);  // may have advanced
+  lcd.print(currentSong.notes[currentNoteIndex]);  // may have advanced
 
   lcd.setCursor(0, 1);
   lcd.print("You: ");
@@ -194,7 +246,7 @@ void loop() {
   Serial.print(" Hz  Detected: ");
   Serial.print(detectedNote);
   Serial.print("  Target: ");
-  Serial.print(song1Notes[currentNoteIndex]);
+  Serial.print(currentSong.notes[currentNoteIndex]);
   Serial.print("  Streak: ");
   Serial.println(correctStreakCount);
 
