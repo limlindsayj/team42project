@@ -48,13 +48,26 @@ bool songStarted = false;        // flag to indicate song completion
 
 Song currentSong = songs[0];     // song that's been selected
 
+String lastLine1 = ""; // stores previous values printed to LCD
+String lastLine2 = ""; // to avoid redundant LCD updates that casue flickering
+
 void printToLCD(const String& line){ // Helper function to print one line to the LCD
+  if(lastLine1 == line && lastLine2 == ""){
+    return; // No need to update
+  }
+  lastLine1 = line;
+  lastLine2 = ""; // Update lastLine values
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print(line);
 }
 
 void printToLCD(const String& line1, const String& line2){ // Helper function to print two lines to the LCD
+  if(lastLine1 == line1 && lastLine2 == line2){
+    return; // No need to update
+  }
+  lastLine1 = line1;
+  lastLine2 = line2; // Update lastLine values
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print(line1);
@@ -74,7 +87,6 @@ class MyCallbacks : public BLECharacteristicCallbacks {
     int songIndex = atoi(value.c_str());
     if (songIndex >= 0 && songIndex < NUM_SONGS) {
       Serial.println("Song selection received: " + String(songIndex));
-      delay(2000);
       currentSong = songs[songIndex];
       songStarted = true;
     } else {
@@ -119,7 +131,7 @@ void setup() {
     .sample_rate = SAMPLE_RATE,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
     .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-    .communication_format = I2S_COMM_FORMAT_I2S,
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
     .intr_alloc_flags = 0,
     .dma_buf_count = 4,
     .dma_buf_len = 256
@@ -139,10 +151,13 @@ void setup() {
 
   Serial.println("Microphone FFT pitch detection started!");
 
+  printToLCD("Select song:", "0: TTLS, 1: ???");
+
   while(!songStarted){
-    printToLCD("Select song:", "0: TTLS, 1: ???");
-    delay(1000);
+    delay(10);
   }
+  printToLCD("Great Choice!", "Song starting...");
+  delay(2000);
 }
 
 String freqToNote(float freq) {
@@ -159,7 +174,7 @@ String freqToNote(float freq) {
     int octave = (midi / 12) - 1;
 
     // String note = String(noteNames[noteIndex]) + String(octave);
-    String note = String(noteNames[noteIndex]); // Return just the note name without octave
+    String note = String(noteNames[noteIndex]); // Returning just the note name without octave
     return note;
 }
 
@@ -192,41 +207,34 @@ void loop() {
   double peakFreq = FFT.MajorPeak(vReal, FFT_SIZE, SAMPLE_RATE);
 
   const char* targetNote = currentSong.notes[currentNoteIndex];
+  String detectedNote = "--";
 
   if (peakFreq <= 0 || isnan(peakFreq) || isinf(peakFreq)) {
     // Silence or invalid reading: just show target note, reset streak
     correctStreakCount = 0;
-
-    printToLCD(String("Play: ") + targetNote);
-
     Serial.println("Silence or invalid peak");
-    delay(50);
-    return;
-  }
+  } else { // Valid frequency detected
+    // Convert detected frequency to a note name
+    detectedNote = freqToNote(peakFreq);
 
-  // Convert detected frequency to a note name
-  String detectedNote = freqToNote(peakFreq);
+    // --- Check if the detected note matches the target ---
+    if (detectedNote == targetNote) {
+      correctStreakCount++;
 
-  // --- Check if the detected note matches the target ---
-  if (detectedNote == targetNote) {
-    correctStreakCount++;
+      if (correctStreakCount >= REQUIRED_STREAK) {
+        // We've seen the correct note for REQUIRED_STREAK cycles in a row
+        currentNoteIndex++;
+        if (currentNoteIndex >= SONG1_LENGTH) {
+          songCompleted = true;
+          return;
+        }
 
-    if (correctStreakCount >= REQUIRED_STREAK) {
-      // We've seen the correct note for REQUIRED_STREAK cycles in a row
-      currentNoteIndex++;
-      if (currentNoteIndex >= SONG1_LENGTH) {
-        songCompleted = true;
-        return;
+        correctStreakCount = 0;  // reset streak for the next note
       }
-
-      correctStreakCount = 0;  // reset streak for the next note
-
-      // Small pause so it doesn't immediately reuse same sound
-      delay(50);
+    } else {
+      // Wrong note, reset streak
+      correctStreakCount = 0;
     }
-  } else {
-    // Wrong note, reset streak
-    correctStreakCount = 0;
   }
 
   // --- Update LCD with target + detected note ---
