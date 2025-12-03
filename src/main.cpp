@@ -38,11 +38,9 @@ Song songs[] = {
 
 const int NUM_SONGS = sizeof(songs) / sizeof(songs[0]);
 
-const int SONG1_LENGTH = sizeof(song1Notes) / sizeof(song1Notes[0]);
-
 int currentNoteIndex = 0;        // which note we're asking for
 int correctStreakCount = 0;      // how many cycles in a row we've detected it
-const int REQUIRED_STREAK = 1;   // TODO: change this, must detect correct note for REQUIRED_STREAK cycles in a row
+const int REQUIRED_STREAK = 1;   // TODO: change this (maybe 10), must detect correct note for REQUIRED_STREAK cycles in a row
 bool songCompleted = false;      // flag to indicate song completion
 bool songStarted = false;        // flag to indicate song completion
 
@@ -147,13 +145,13 @@ void setup() {
   i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_NUM_0, &pin_config);
 
-  setupBLE();
+  setupBLE(); // Set up the BLE server
 
   Serial.println("Microphone FFT pitch detection started!");
 
   printToLCD("Select song:", "0: TTLS, 1: ???");
 
-  while(!songStarted){
+  while(!songStarted){ // Wait for song selection via BLE
     delay(10);
   }
   printToLCD("Great Choice!", "Song starting...");
@@ -210,7 +208,7 @@ void loop() {
   String detectedNote = "--";
 
   if (peakFreq <= 0 || isnan(peakFreq) || isinf(peakFreq)) {
-    // Silence or invalid reading: just show target note, reset streak
+    // Silence or invalid reading: reset streak
     correctStreakCount = 0;
     Serial.println("Silence or invalid peak");
   } else { // Valid frequency detected
@@ -224,7 +222,7 @@ void loop() {
       if (correctStreakCount >= REQUIRED_STREAK) {
         // We've seen the correct note for REQUIRED_STREAK cycles in a row
         currentNoteIndex++;
-        if (currentNoteIndex >= SONG1_LENGTH) {
+        if (currentNoteIndex >= currentSong.length) {
           songCompleted = true;
           return;
         }
@@ -238,7 +236,7 @@ void loop() {
   }
 
   // --- Update LCD with target + detected note ---
-  printToLCD(String("Play: ") + currentSong.notes[currentNoteIndex], String("You: ") + detectedNote);  // may have advanced
+  printToLCD(String("Play: ") + currentSong.notes[currentNoteIndex], String("You: ") + detectedNote);
 
   // Debug serial output
   Serial.print("Freq: ");
