@@ -22,13 +22,24 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 double vReal[FFT_SIZE];
 double vImag[FFT_SIZE];
 
+const char* song1Notes[] = { // Adjust to notes of Twinkle Twinkle Little Star
+    "C", "C#", "D", "D#", "E", "F",
+};
+
+const int SONG1_LENGTH = sizeof(song1Notes) / sizeof(song1Notes[0]);
+
+int currentNoteIndex = 0;        // which note we're asking for
+int correctStreakCount = 0;      // how many cycles in a row we've detected it
+const int REQUIRED_STREAK = 1;   // TODO: change this, must detect correct note for REQUIRED_STREAK cycles in a row
+bool songCompleted = false;      // flag to indicate song completion
+
 void setupBLE(){
   BLEDevice::init("NoteTutor");
 
   BLEServer *pServer   = BLEDevice::createServer();
   BLEService *pService = pServer->createService(SERVICE_UUID);
 
-  BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+  BLECharacteristic *selectedSongCharacteristic = pService->createCharacteristic(
     CHARACTERISTIC_UUID,
     BLECharacteristic::PROPERTY_READ |
     BLECharacteristic::PROPERTY_WRITE
@@ -89,14 +100,27 @@ String freqToNote(float freq) {
     int noteIndex = midi % 12;
     int octave = (midi / 12) - 1;
 
-    String note = String(noteNames[noteIndex]) + String(octave);
+    // String note = String(noteNames[noteIndex]) + String(octave);
+    String note = String(noteNames[noteIndex]); // Return just the note name without octave
     return note;
 }
 
 void loop() {
+
+  if (songCompleted) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Song complete!");
+    lcd.setCursor(1, 0);
+    lcd.print("Congrats :)");
+    delay(10000);
+    return;
+  }
+
   int32_t sample32;
   size_t bytes_read;
 
+  // --- Collect samples for FFT ---
   for (int i = 0; i < FFT_SIZE; i++) {
     i2s_read(I2S_NUM_0, &sample32, sizeof(sample32), &bytes_read, portMAX_DELAY);
 
@@ -106,30 +130,73 @@ void loop() {
     vImag[i] = 0.0;
   }
 
+  // --- Run FFT ---
   FFT.Windowing(vReal, FFT_SIZE, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
-
   FFT.Compute(vReal, vImag, FFT_SIZE, FFT_FORWARD);
   FFT.ComplexToMagnitude(vReal, vImag, FFT_SIZE);
 
   double peakFreq = FFT.MajorPeak(vReal, FFT_SIZE, SAMPLE_RATE);
 
-  if (peakFreq <= 0 || isnan(peakFreq) || isinf(peakFreq)) { // Error checking in case we get invalid frequency
+  const char* targetNote = song1Notes[currentNoteIndex];
+
+  if (peakFreq <= 0 || isnan(peakFreq) || isinf(peakFreq)) {
+    // Silence or invalid reading: just show target note, reset streak
+    correctStreakCount = 0;
+
     lcd.clear();
     lcd.setCursor(0, 0);
-    lcd.print("Pitch: --");
+    lcd.print("Play: ");
+    lcd.print(targetNote);
+
     Serial.println("Silence or invalid peak");
     delay(50);
     return;
   }
 
-  lcd.clear(); 
-  lcd.setCursor(0, 0);
-  lcd.print("Pitch: "); 
-  lcd.print(freqToNote(peakFreq));
-  Serial.print("Pitch: ");
-  Serial.print(peakFreq);
-  Serial.print(" Hz ");
-  Serial.println(freqToNote(peakFreq));
+  // Convert detected frequency to a note name
+  String detectedNote = freqToNote(peakFreq);
 
-  delay(50);
+  // --- Check if the detected note matches the target ---
+  if (detectedNote == targetNote) {
+    correctStreakCount++;
+
+    if (correctStreakCount >= REQUIRED_STREAK) {
+      // We've seen the correct note for REQUIRED_STREAK cycles in a row
+      currentNoteIndex++;
+      if (currentNoteIndex >= SONG1_LENGTH) {
+        songCompleted = true;
+        return;
+      }
+
+      correctStreakCount = 0;  // reset streak for the next note
+
+      // Optional small pause so it doesn't immediately reuse same sound
+      delay(50);
+    }
+  } else {
+    // Wrong note, reset streak
+    correctStreakCount = 0;
+  }
+
+  // --- Update LCD with target + detected note ---
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Play: ");
+  lcd.print(song1Notes[currentNoteIndex]);  // may have advanced
+
+  lcd.setCursor(0, 1);
+  lcd.print("You: ");
+  lcd.print(detectedNote);
+
+  // Debug serial output
+  Serial.print("Freq: ");
+  Serial.print(peakFreq);
+  Serial.print(" Hz  Detected: ");
+  Serial.print(detectedNote);
+  Serial.print("  Target: ");
+  Serial.print(song1Notes[currentNoteIndex]);
+  Serial.print("  Streak: ");
+  Serial.println(correctStreakCount);
+
+  delay(10);
 }
