@@ -48,6 +48,20 @@ bool songStarted = false;        // flag to indicate song completion
 
 Song currentSong = songs[0];     // song that's been selected
 
+void printToLCD(const String& line){ // Helper function to print one line to the LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(line);
+}
+
+void printToLCD(const String& line1, const String& line2){ // Helper function to print two lines to the LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(line1);
+  lcd.setCursor(0, 1);
+  lcd.print(line2);
+}
+
 class MyCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pCharacteristic) override {
     if(songStarted){
@@ -60,17 +74,12 @@ class MyCallbacks : public BLECharacteristicCallbacks {
     int songIndex = atoi(value.c_str());
     if (songIndex >= 0 && songIndex < NUM_SONGS) {
       Serial.println("Song selection received: " + String(songIndex));
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("Great choice!");
       delay(2000);
       currentSong = songs[songIndex];
       songStarted = true;
     } else {
       Serial.println("Invalid song index received");
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("Invalid song index received");
+      printToLCD("Invalid song index received");
     }
   }
 };
@@ -131,10 +140,7 @@ void setup() {
   Serial.println("Microphone FFT pitch detection started!");
 
   while(!songStarted){
-    lcd.setCursor(0, 0);
-    lcd.print("Select song:");
-    lcd.setCursor(0, 1);
-    lcd.print("0: TTLS, 1: ???");
+    printToLCD("Select song:", "0: TTLS, 1: ???");
     delay(1000);
   }
 }
@@ -160,11 +166,7 @@ String freqToNote(float freq) {
 void loop() {
 
   if (songCompleted) {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Song complete!");
-    lcd.setCursor(0, 1);
-    lcd.print("Congrats :)");
+    printToLCD("Song complete!", "Congrats :)");
     delay(10000);
     return;
   }
@@ -195,10 +197,7 @@ void loop() {
     // Silence or invalid reading: just show target note, reset streak
     correctStreakCount = 0;
 
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Play: ");
-    lcd.print(targetNote);
+    printToLCD(String("Play: ") + targetNote);
 
     Serial.println("Silence or invalid peak");
     delay(50);
@@ -222,7 +221,7 @@ void loop() {
 
       correctStreakCount = 0;  // reset streak for the next note
 
-      // Optional small pause so it doesn't immediately reuse same sound
+      // Small pause so it doesn't immediately reuse same sound
       delay(50);
     }
   } else {
@@ -231,14 +230,7 @@ void loop() {
   }
 
   // --- Update LCD with target + detected note ---
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Play: ");
-  lcd.print(currentSong.notes[currentNoteIndex]);  // may have advanced
-
-  lcd.setCursor(0, 1);
-  lcd.print("You: ");
-  lcd.print(detectedNote);
+  printToLCD(String("Play: ") + currentSong.notes[currentNoteIndex], String("You: ") + detectedNote);  // may have advanced
 
   // Debug serial output
   Serial.print("Freq: ");
