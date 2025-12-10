@@ -17,6 +17,8 @@
 #define I2S_WS   25    // LRCLK
 #define I2S_SCK  26    // BCLK
 #define I2S_SD   33    // DOUT
+#define GREEN_LED_PIN  27
+#define RED_LED_PIN    15
 
 #define SAMPLE_RATE   16000
 #define FFT_SIZE      1024
@@ -227,6 +229,12 @@ void setup() {
   lcd.backlight();
   lcd.clear();
   printToLCD("Booting...", "");
+
+  // LEDs
+  pinMode(GREEN_LED_PIN, OUTPUT);
+  pinMode(RED_LED_PIN, OUTPUT);
+  digitalWrite(GREEN_LED_PIN, HIGH);
+  digitalWrite(RED_LED_PIN, HIGH);
 
   // Microphone / I2S
   setupI2S();
