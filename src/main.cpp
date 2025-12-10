@@ -2,15 +2,14 @@
 #include "driver/i2s.h"
 #include <arduinoFFT.h>
 #include <LiquidCrystal_I2C.h>
-#include <BLEDevice.h>
-#include <BLEUtils.h>
-#include <BLEServer.h>
+#include <NimBLEDevice.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <math.h>
 #include "cloud_info.h"
+#include "esp_heap_caps.h"
 
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
@@ -79,15 +78,17 @@ void printToLCD(const String& line1, const String& line2) {
   lcd.print(line2);
 }
 
-class MyCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *pCharacteristic) override {
+class MyCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo& connInfo) override {
     if (songStarted) {
       return; // Ignore further writes once the song has started
     }
+
     std::string value = pCharacteristic->getValue();
     if (value.length() == 0) {
       return;
     }
+
     int songIndex = atoi(value.c_str());
     if (songIndex >= 0 && songIndex < NUM_SONGS) {
       Serial.println("Song selection received: " + String(songIndex));
@@ -101,31 +102,30 @@ class MyCallbacks : public BLECharacteristicCallbacks {
 };
 
 void setupBLE() {
-  BLEDevice::init("NoteTutor");
+  NimBLEDevice::init("NoteTutor");
 
-  BLEServer *pServer   = BLEDevice::createServer();
-  BLEService *pService = pServer->createService(SERVICE_UUID);
+  NimBLEDevice::setPower(ESP_PWR_LVL_N0);
+  NimBLEDevice::setMTU(23); 
+  NimBLEDevice::setSecurityAuth(false, false, false);
 
-  BLECharacteristic *selectedSongCharacteristic = pService->createCharacteristic(
+  NimBLEServer *pServer   = NimBLEDevice::createServer();
+  NimBLEService *pService = pServer->createService(SERVICE_UUID);
+
+  NimBLECharacteristic *selectedSongCharacteristic = pService->createCharacteristic(
     CHARACTERISTIC_UUID,
-    BLECharacteristic::PROPERTY_READ |
-    BLECharacteristic::PROPERTY_WRITE
+    NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE
   );
 
-  pService->start();
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06);  // helps with iPhone connections
-  pAdvertising->setMinPreferred(0x12);
-  BLEDevice::startAdvertising();
   selectedSongCharacteristic->setCallbacks(new MyCallbacks());
-  Serial.println("BLE Initialized");
-}
 
-// ---------------------------------------------------------------------------
-// I2S (microphone) setup
-// ---------------------------------------------------------------------------
+  pService->start();
+
+  NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+
+  NimBLEDevice::startAdvertising();
+  Serial.println("BLE Initialized (NimBLE)");
+}
 
 void setupI2S() {
   i2s_config_t i2s_config = {
@@ -175,7 +175,7 @@ void setupCloud() {
 
 // Send one telemetry message to the cloud
 void sendTelemetry(const String &note) {
-  StaticJsonDocument<128> doc;
+  JsonDocument doc;
   doc["note"] = note;
 
   char buffer[128];
@@ -228,8 +228,6 @@ void setup() {
   lcd.clear();
   printToLCD("Booting...", "");
 
-  // FFT object already constructed globally
-
   // Microphone / I2S
   setupI2S();
 
@@ -247,10 +245,8 @@ void setup() {
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
 
-  // Cloud client (TLS/HTTP)
   setupCloud();
 
-  // BLE
   setupBLE(); // Set up the BLE server
 
   Serial.println("Microphone FFT pitch detection started!");
