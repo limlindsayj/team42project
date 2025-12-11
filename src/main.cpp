@@ -10,6 +10,7 @@
 #include <math.h>
 #include "cloud_info.h"
 #include "esp_heap_caps.h"
+#include "SPIFFS.h"
 
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
@@ -23,6 +24,8 @@
 #define SAMPLE_RATE   16000
 #define FFT_SIZE      1024
 
+int fileCounter = 0;
+
 arduinoFFT FFT = arduinoFFT();
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
@@ -35,19 +38,19 @@ struct Song {
   const char* name;
 };
 
-const char* song1Notes[] = { "C", "C#", "D" };
-const char* song2Notes[] = { "A", "B", "C#" };
+const char* song1Notes[] = { "C", "C", "G", "G", "A", "A", "G", "F", "F", "E", "E", "D", "D", "C"};
+const char* song2Notes[] = { "G", "C", "B", "C", "E", "D", "C", "D", "E", "D", "C", "A", "A", "G", "C"};
 
 Song songs[] = {
-  { song1Notes, sizeof(song1Notes) / sizeof(song1Notes[0]), "Song 1" },
-  { song2Notes, sizeof(song2Notes) / sizeof(song2Notes[0]), "Song 2" }
+  { song1Notes, sizeof(song1Notes) / sizeof(song1Notes[0]), "Twinke, Twinkle, Little Star" },
+  { song2Notes, sizeof(song2Notes) / sizeof(song2Notes[0]), "Happy Birthday (Short)" }
 };
 
 const int NUM_SONGS = sizeof(songs) / sizeof(songs[0]);
 
 int currentNoteIndex = 0;        // which note we're asking for
 int correctStreakCount = 0;      // how many cycles in a row we've detected it
-const int REQUIRED_STREAK = 1;   // will adjust later
+const int REQUIRED_STREAK = 10;   // will adjust later
 bool songCompleted = false;      // flag to indicate song completion
 bool songStarted = false;        // flag to indicate song selection completion
 
@@ -55,6 +58,24 @@ Song currentSong = songs[0];     // song that's been selected
 
 String lastLine1 = ""; // stores previous values printed to LCD
 String lastLine2 = ""; // to avoid redundant LCD updates that cause flickering
+
+void dumpSPIFFS() {
+  File root = SPIFFS.open("/");
+  File file = root.openNextFile();
+
+  Serial.println("\n--- Dumping SPIFFS Files ---");
+
+  while (file) {
+    // Print file contents
+    while (file.available()) {
+      Serial.write(file.read());
+    }
+    Serial.println();
+
+    file = root.openNextFile();
+  }
+}
+
 
 void printToLCD(const String& line) { // one-line helper
   if (lastLine1 == line && lastLine2 == "") {
@@ -80,6 +101,8 @@ void printToLCD(const String& line1, const String& line2) {
   lcd.print(line2);
 }
 
+int songIndex = -1; // selected song index
+
 class MyCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo& connInfo) override {
     if (songStarted) {
@@ -91,7 +114,7 @@ class MyCallbacks : public NimBLECharacteristicCallbacks {
       return;
     }
 
-    int songIndex = atoi(value.c_str());
+    songIndex = atoi(value.c_str());
     if (songIndex >= 0 && songIndex < NUM_SONGS) {
       Serial.println("Song selection received: " + String(songIndex));
       currentSong = songs[songIndex];
@@ -176,14 +199,34 @@ void setupCloud() {
 }
 
 // Send one telemetry message to the cloud
-void sendTelemetry(const String &note) {
+void sendTelemetry(const String &note, const String &targetNote, const int song) {
   JsonDocument doc;
   doc["note"] = note;
+  doc["targetNote"] = targetNote;
+  doc["song"] = song;
+  doc["noteAccurate"] = (note == targetNote);
 
-  char buffer[128];
+  // Serialize to buffer
+  char buffer[256];
   size_t len = serializeJson(doc, buffer, sizeof(buffer));
 
-  if (!http.begin(secureClient, url)) {   // `url` comes from cloud_info.h
+  // --- Create unique filename ---
+  fileCounter++;
+  String filename = "/telemetry_" + String(fileCounter) + ".json";
+
+  // --- Write JSON to uniquely named file ---
+  File file = SPIFFS.open(filename, FILE_WRITE);
+  if (!file) {
+    Serial.println("Failed to create file");
+  } else {
+    file.write((uint8_t*)buffer, len);
+    file.close();
+    Serial.print("Wrote telemetry to ");
+    Serial.println(filename);
+  }
+
+  // --- HTTP logic ---
+  if (!http.begin(secureClient, url)) {
     Serial.println("HTTP begin failed");
     return;
   }
@@ -193,13 +236,14 @@ void sendTelemetry(const String &note) {
 
   int httpCode = http.POST((uint8_t*)buffer, len);
 
-  if (httpCode == 204) { // IoT Hub returns 204 No Content for successful telemetry
+  if (httpCode == 204) {
     Serial.print("Information sent: ");
     Serial.println(buffer);
   } else {
     Serial.print("Failed to send information. HTTP code: ");
     Serial.println(httpCode);
   }
+
   http.end();
 }
 
@@ -233,8 +277,15 @@ void setup() {
   // LEDs
   pinMode(GREEN_LED_PIN, OUTPUT);
   pinMode(RED_LED_PIN, OUTPUT);
-  digitalWrite(GREEN_LED_PIN, HIGH);
-  digitalWrite(RED_LED_PIN, HIGH);
+  digitalWrite(GREEN_LED_PIN, LOW);
+  digitalWrite(RED_LED_PIN, LOW);
+
+  if (!SPIFFS.begin(true)) {
+    Serial.println("SPIFFS Mount Failed");
+    return;
+  }
+
+  Serial.println("SPIFFS mounted successfully");
 
   // Microphone / I2S
   setupI2S();
@@ -272,26 +323,38 @@ void setup() {
 
 void loop() {
 
+  static unsigned long feedbackUntil = 0;     // time until we hide "Correct!" or "Try again!"
+  static bool showingFeedback = false;
+  static unsigned long lastValidFreqTime = 0; // for stability checking
+  static String lastStableNote = "";
+
   if (songCompleted) {
     printToLCD("Song complete!", "Congrats :)");
     delay(10000);
     return;
   }
 
+  // If we are still showing “Correct!” or “Try again!” then do nothing else
+  if (showingFeedback) {
+    if (millis() < feedbackUntil) {
+      return;
+    } else {
+      showingFeedback = false;
+    }
+  }
+
   int32_t sample32;
   size_t bytes_read;
 
-  // --- Collect samples for FFT ---
+  // --- Collect samples ---
   for (int i = 0; i < FFT_SIZE; i++) {
     i2s_read(I2S_NUM_0, &sample32, sizeof(sample32), &bytes_read, portMAX_DELAY);
-
     float s = sample32 / 2147483648.0f;
-
     vReal[i] = s;
     vImag[i] = 0.0;
   }
 
-  // --- Run FFT ---
+  // --- FFT processing ---
   FFT.Windowing(vReal, FFT_SIZE, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
   FFT.Compute(vReal, vImag, FFT_SIZE, FFT_FORWARD);
   FFT.ComplexToMagnitude(vReal, vImag, FFT_SIZE);
@@ -301,58 +364,73 @@ void loop() {
   const char* targetNote = currentSong.notes[currentNoteIndex];
   String detectedNote = "--";
 
+  // --- Handle silence (does NOT count as wrong) ---
   if (peakFreq <= 0 || isnan(peakFreq) || isinf(peakFreq)) {
-    // Silence or invalid reading: reset streak
-    correctStreakCount = 0;
-    Serial.println("Silence or invalid peak");
-  } else { // Valid frequency detected
-    // Convert detected frequency to a note name
-    detectedNote = freqToNote(peakFreq);
-
-    // --- Check if the detected note matches the target ---
-    if (detectedNote == targetNote) {
-      correctStreakCount++;
-
-      if (correctStreakCount >= REQUIRED_STREAK) {
-        // We've seen the correct note for REQUIRED_STREAK cycles in a row
-        currentNoteIndex++;
-        if (currentNoteIndex >= currentSong.length) {
-          songCompleted = true;
-          return;
-        }
-
-        correctStreakCount = 0;  // reset streak for the next note
-      }
-    } else {
-      // Wrong note, reset streak
-      correctStreakCount = 0;
-    }
+    printToLCD(String("Play: ") + targetNote, "You: --");
+    return; 
   }
 
-  // --- Update LCD with target + detected note ---
-  printToLCD(String("Play: ") + currentSong.notes[currentNoteIndex], String("You: ") + detectedNote);
+  detectedNote = freqToNote(peakFreq);
 
-  // Debug serial output
-  Serial.print("Freq: ");
-  Serial.print(peakFreq);
-  Serial.print(" Hz  Detected: ");
-  Serial.print(detectedNote);
-  Serial.print("  Target: ");
-  Serial.print(currentSong.notes[currentNoteIndex]);
-  Serial.print("  Streak: ");
-  Serial.println(correctStreakCount);
+  // ---- NOTE STABILITY CHECK ----
+  if (detectedNote == lastStableNote) {
+    // note is the same as previous frame → stable
+  } else {
+    // note changed → reset stability timer
+    lastStableNote = detectedNote;
+    lastValidFreqTime = millis();
+  }
 
+  // Require 300ms of stability before evaluating
+  if (millis() - lastValidFreqTime < 300) {
+    // Not stable long enough → wait
+    printToLCD(String("Play: ") + targetNote, String("You: ") + detectedNote);
+    digitalWrite(GREEN_LED_PIN, LOW);
+    digitalWrite(RED_LED_PIN, LOW);
+    return;
+  }
+
+  // -------- Evaluate note after 300ms stable --------
+
+  if (detectedNote == targetNote) {
+
+    // Correct!
+    currentNoteIndex++;
+
+    printToLCD("Correct!", "");
+    showingFeedback = true;
+    digitalWrite(GREEN_LED_PIN, HIGH);
+    digitalWrite(RED_LED_PIN, LOW);
+    feedbackUntil = millis() + 1000;  // 1 second
+
+    if (currentNoteIndex >= currentSong.length) {
+      songCompleted = true;
+      dumpSPIFFS();
+    }
+
+    sendTelemetry(detectedNote, targetNote, songIndex);
+
+    return;
+  }
+
+  // Wrong (but stable)
+  printToLCD("Try again!", "");
+  showingFeedback = true;
+  digitalWrite(GREEN_LED_PIN, LOW);
+  digitalWrite(RED_LED_PIN, HIGH);
+  feedbackUntil = millis() + 1000;   // 1 second
+  
   // Cloud telemetry
   unsigned long now = millis();
   if (now - lastSendMs >= SEND_INTERVAL_MS) {
     lastSendMs = now;
 
-    if (detectedNote != lastSentNote) {
-      sendTelemetry(detectedNote);
-      lastSentNote = detectedNote;
-    }
+    sendTelemetry(detectedNote, targetNote, songIndex);
   }
 
-  // Small delay
-  delay(10);
+  return;
 }
+
+/*
+az iot hub monitor-events --hub-name CS147Team42 --device-id 147esp32_team42 --properties all
+*/
