@@ -48,13 +48,13 @@ Song songs[] = {
 
 const int NUM_SONGS = sizeof(songs) / sizeof(songs[0]);
 
-int currentNoteIndex = 0;        // which note we're asking for
-int correctStreakCount = 0;      // how many cycles in a row we've detected it
-const int REQUIRED_STREAK = 10;   // will adjust later
-bool songCompleted = false;      // flag to indicate song completion
-bool songStarted = false;        // flag to indicate song selection completion
+int currentNoteIndex = 0;         // which note we're asking for
+int correctStreakCount = 0;       // how many cycles in a row we've detected it
+const int REQUIRED_STREAK = 10;   // how many loops we need to detect the note correctly before we consider it detected
+bool songCompleted = false;       // flag to indicate song completion
+bool songStarted = false;         // flag to indicate song selection completion
 
-Song currentSong = songs[0];     // song that's been selected
+Song currentSong = songs[0];      // song that's been selected
 
 String lastLine1 = ""; // stores previous values printed to LCD
 String lastLine2 = ""; // to avoid redundant LCD updates that cause flickering
@@ -63,7 +63,7 @@ void dumpSPIFFS() {
   File root = SPIFFS.open("/");
   File file = root.openNextFile();
 
-  Serial.println("\n--- Dumping SPIFFS Files ---");
+  Serial.println("\nDumping SPIFFS Files");
 
   while (file) {
     // Print file contents
@@ -76,8 +76,7 @@ void dumpSPIFFS() {
   }
 }
 
-
-void printToLCD(const String& line) { // one-line helper
+void printToLCD(const String& line) {
   if (lastLine1 == line && lastLine2 == "") {
     return; // No need to update
   }
@@ -178,9 +177,7 @@ void setupI2S() {
   i2s_set_pin(I2S_NUM_0, &pin_config);
 }
 
-// ---------------------------------------------------------------------------
 // Cloud (TLS/HTTP) globals and helpers
-// ---------------------------------------------------------------------------
 
 WiFiClientSecure secureClient;
 HTTPClient http;
@@ -193,7 +190,7 @@ String lastSentNote = "";
 // Configure TLS / HTTP once
 void setupCloud() {
   secureClient.setCACert(root_ca);
-  secureClient.setTimeout(5000);            // 5s timeout is fine for telemetry
+  secureClient.setTimeout(5000);            // 5s timeout for telemetry
 
   http.setReuse(true);                      // allow connection reuse if possible
 }
@@ -210,11 +207,11 @@ void sendTelemetry(const String &note, const String &targetNote, const int song)
   char buffer[256];
   size_t len = serializeJson(doc, buffer, sizeof(buffer));
 
-  // --- Create unique filename ---
+  // Create unique filename
   fileCounter++;
   String filename = "/telemetry_" + String(fileCounter) + ".json";
 
-  // --- Write JSON to uniquely named file ---
+  // Write JSON to uniquely named file
   File file = SPIFFS.open(filename, FILE_WRITE);
   if (!file) {
     Serial.println("Failed to create file");
@@ -225,7 +222,7 @@ void sendTelemetry(const String &note, const String &targetNote, const int song)
     Serial.println(filename);
   }
 
-  // --- HTTP logic ---
+  // HTTP logic
   if (!http.begin(secureClient, url)) {
     Serial.println("HTTP begin failed");
     return;
@@ -346,7 +343,7 @@ void loop() {
   int32_t sample32;
   size_t bytes_read;
 
-  // --- Collect samples ---
+  // Collect samples
   for (int i = 0; i < FFT_SIZE; i++) {
     i2s_read(I2S_NUM_0, &sample32, sizeof(sample32), &bytes_read, portMAX_DELAY);
     float s = sample32 / 2147483648.0f;
@@ -354,7 +351,7 @@ void loop() {
     vImag[i] = 0.0;
   }
 
-  // --- FFT processing ---
+  // FFT processing
   FFT.Windowing(vReal, FFT_SIZE, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
   FFT.Compute(vReal, vImag, FFT_SIZE, FFT_FORWARD);
   FFT.ComplexToMagnitude(vReal, vImag, FFT_SIZE);
@@ -364,7 +361,7 @@ void loop() {
   const char* targetNote = currentSong.notes[currentNoteIndex];
   String detectedNote = "--";
 
-  // --- Handle silence (does NOT count as wrong) ---
+  // Handle silence (does NOT count as wrong)
   if (peakFreq <= 0 || isnan(peakFreq) || isinf(peakFreq)) {
     printToLCD(String("Play: ") + targetNote, "You: --");
     return; 
@@ -372,7 +369,7 @@ void loop() {
 
   detectedNote = freqToNote(peakFreq);
 
-  // ---- NOTE STABILITY CHECK ----
+  // Note stability checking
   if (detectedNote == lastStableNote) {
     // note is the same as previous frame → stable
   } else {
@@ -390,11 +387,11 @@ void loop() {
     return;
   }
 
-  // -------- Evaluate note after 300ms stable --------
+  // Evaluate note after 300ms stable
 
   if (detectedNote == targetNote) {
 
-    // Correct!
+    // Note is correct
     currentNoteIndex++;
 
     printToLCD("Correct!", "");
@@ -405,15 +402,16 @@ void loop() {
 
     if (currentNoteIndex >= currentSong.length) {
       songCompleted = true;
-      dumpSPIFFS();
+      dumpSPIFFS(); // print all telemetry files to serial port
     }
 
+    // Cloud telemetry
     sendTelemetry(detectedNote, targetNote, songIndex);
 
     return;
   }
 
-  // Wrong (but stable)
+  // Wrong (and stable)
   printToLCD("Try again!", "");
   showingFeedback = true;
   digitalWrite(GREEN_LED_PIN, LOW);
@@ -430,7 +428,3 @@ void loop() {
 
   return;
 }
-
-/*
-az iot hub monitor-events --hub-name CS147Team42 --device-id 147esp32_team42 --properties all
-*/
